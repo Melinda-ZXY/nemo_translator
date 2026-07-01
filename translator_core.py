@@ -52,6 +52,7 @@ LEXICON = {
     "不": {"nemo": "ko", "pos": "particle", "function": "negation"},
     "和": {"nemo": "la", "pos": "particle", "function": "with"},
     "喜欢": {"nemo": "lumi", "pos": "particle", "function": "like"},
+    "是": {"nemo": "", "pos": "particle", "function": "copula"},
     "的": {"nemo": "ta", "pos": "particle", "function": "possessive"},
 
     # Robot name
@@ -158,6 +159,7 @@ def parse_tokens(token_infos):
         "state": None,
         "object": None,
         "adverb": None,
+        "negation_target": None,
         "with": None,
         "possessor": None,
         "possessed": None,
@@ -173,18 +175,29 @@ def parse_tokens(token_infos):
         })
         return parsed
 
+    copula_index = _function_index(core, "copula")
+    if copula_index >= 0:
+        before = core[:copula_index]
+        after = core[copula_index + 1:]
+        parsed["type"] = "identity"
+        parsed["subject"] = _first_pos(_without_functions(before, {"negation"}), "noun")
+        parsed["object"] = _first_non_function(_without_functions(after, {"negation"}))
+        if parsed["negation"]:
+            parsed["negation_target"] = "object"
+        return parsed
+
     want_index = _function_index(core, "want")
     if want_index >= 0:
         before = core[:want_index]
-        after = _without_functions(core[want_index + 1:], {"negation"})
-        with_index = _function_index(after, "with")
-        if with_index >= 0:
-            parsed["with"] = after[with_index + 1] if with_index + 1 < len(after) else None
-            after = after[:with_index] + after[with_index + 2:]
+        after = core[want_index + 1:]
         parsed["type"] = "want"
-        parsed["subject"] = _first_pos(before, "noun")
-        parsed["verb"] = _first_pos(after, "verb")
-        parsed["object"] = _first_non_function(after, exclude=parsed["verb"])
+        parsed["subject"] = _first_pos(_without_functions(before, {"negation"}), "noun")
+        _assign_predicate_tail(parsed, after)
+        parsed["negation_target"] = _negation_target(
+            parsed,
+            main_items=before,
+            tail_items=after,
+        )
         return parsed
 
     with_index = _function_index(core, "with")
@@ -194,9 +207,16 @@ def parse_tokens(token_infos):
 
     like_index = _function_index(core, "like")
     if like_index >= 0:
+        before = core[:like_index]
+        after = core[like_index + 1:]
         parsed["type"] = "like"
-        parsed["subject"] = _first_pos(core[:like_index], "noun")
-        parsed["object"] = _first_non_function(core[like_index + 1:])
+        parsed["subject"] = _first_pos(_without_functions(before, {"negation"}), "noun")
+        _assign_predicate_tail(parsed, after)
+        parsed["negation_target"] = _negation_target(
+            parsed,
+            main_items=before,
+            tail_items=after,
+        )
         return parsed
 
     working = _without_functions(core, {"negation"})
@@ -207,6 +227,8 @@ def parse_tokens(token_infos):
 
     if parsed["state"] is not None:
         parsed["type"] = "state"
+        if parsed["negation"]:
+            parsed["negation_target"] = "state"
         return parsed
 
     if parsed["verb"] is not None:
@@ -215,9 +237,13 @@ def parse_tokens(token_infos):
             working,
             exclude=[parsed["subject"], parsed["verb"], parsed["adverb"]],
         )
+        if parsed["negation"]:
+            parsed["negation_target"] = "verb"
         return parsed
 
     parsed["object"] = _first_non_function(working, exclude=parsed["subject"])
+    if parsed["negation"] and parsed["object"] is not None:
+        parsed["negation_target"] = "object"
     return parsed
 
 
@@ -226,9 +252,6 @@ def generate_nemo(parsed, omit_nemo_subject=True):
 
     if parsed.get("question"):
         tokens.append("kada")
-
-    if parsed.get("negation"):
-        tokens.append("ko")
 
     sentence_type = parsed.get("type")
     subject = parsed.get("subject")
@@ -239,35 +262,56 @@ def generate_nemo(parsed, omit_nemo_subject=True):
         _append(tokens, parsed.get("possessor"))
         return tokens
 
+    if sentence_type == "identity":
+        _append_subject(tokens, subject, omit_nemo_subject=False)
+        _append(tokens, parsed.get("object"))
+        _append_negation(tokens, parsed, "object")
+        return tokens
+
     if sentence_type == "want":
         tokens.append("tika")
-        _append_subject(tokens, subject, omit_nemo_subject)
+        _append_negation(tokens, parsed, "main")
+        _append_subject(tokens, subject, omit_nemo_subject=False)
         if parsed.get("object") is not None:
             _append(tokens, parsed.get("object"))
+            _append_negation(tokens, parsed, "object")
         if parsed.get("with") is not None:
             _append_with(tokens, parsed.get("with"))
         if parsed.get("verb") is not None:
             _append(tokens, parsed.get("verb"))
+            _append(tokens, parsed.get("adverb"))
+            _append_negation(tokens, parsed, "verb")
         return tokens
 
     if sentence_type == "like":
         tokens.append("lumi")
+        _append_negation(tokens, parsed, "main")
+        _append_subject(tokens, subject, omit_nemo_subject=False)
         _append(tokens, parsed.get("object"))
-        _append_subject(tokens, subject, omit_nemo_subject)
+        _append_negation(tokens, parsed, "object")
+        if parsed.get("with") is not None:
+            _append_with(tokens, parsed.get("with"))
+        if parsed.get("verb") is not None:
+            _append(tokens, parsed.get("verb"))
+            _append(tokens, parsed.get("adverb"))
+            _append_negation(tokens, parsed, "verb")
         return tokens
 
     if sentence_type == "state":
         _append(tokens, parsed.get("state"))
+        _append_negation(tokens, parsed, "state")
         _append_subject(tokens, subject, omit_nemo_subject)
         return tokens
 
     if sentence_type == "verb":
         _append(tokens, parsed.get("verb"))
         _append(tokens, parsed.get("adverb"))
+        _append_negation(tokens, parsed, "verb")
         _append_subject(tokens, subject, omit_nemo_subject)
         if parsed.get("with") is not None:
             _append_with(tokens, parsed.get("with"))
         _append(tokens, parsed.get("object"))
+        _append_negation(tokens, parsed, "object")
         return tokens
 
     for item in parsed.get("raw_tokens", []):
@@ -336,6 +380,44 @@ def _without_functions(items, functions):
     return [item for item in items if item.get("function") not in functions]
 
 
+def _assign_predicate_tail(parsed, items):
+    items = list(items)
+    with_index = _function_index(items, "with")
+    if with_index >= 0:
+        parsed["with"] = items[with_index + 1] if with_index + 1 < len(items) else None
+        items = items[:with_index] + items[with_index + 2:]
+
+    content = _without_functions(items, {"negation"})
+    parsed["verb"] = _first_pos(content, "verb")
+    parsed["adverb"] = _first_pos(content, "adverb")
+    parsed["object"] = _first_non_function(
+        content,
+        exclude=[parsed["verb"], parsed["adverb"]],
+    )
+
+
+def _negation_target(parsed, main_items, tail_items):
+    if not parsed.get("negation"):
+        return None
+
+    if _has_function(main_items, "negation"):
+        return "main"
+
+    negation_index = _function_index(tail_items, "negation")
+    if negation_index < 0:
+        return "main"
+
+    following = _without_functions(tail_items[negation_index + 1:], {"question"})
+    target = _first_non_function(following)
+    if target is parsed.get("verb"):
+        return "verb"
+    if target is parsed.get("object"):
+        return "object"
+    if target is parsed.get("adverb") and parsed.get("verb") is not None:
+        return "verb"
+    return "main"
+
+
 def _first_pos(items, pos):
     for item in items:
         if item.get("pos") == pos:
@@ -360,13 +442,18 @@ def _first_non_function(items, exclude=None):
 
 
 def _append(tokens, item):
-    if item is not None:
+    if item is not None and item.get("nemo"):
         tokens.append(item["nemo"])
 
 
 def _append_with(tokens, item):
     if item is not None:
         tokens.append(f"{item['nemo']}-la")
+
+
+def _append_negation(tokens, parsed, target):
+    if parsed.get("negation") and parsed.get("negation_target") == target:
+        tokens.append("ko")
 
 
 def _should_omit_nemo_subject(text):
