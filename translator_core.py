@@ -53,7 +53,7 @@ LEXICON = {
     "和": {"nemo": "la", "pos": "particle", "function": "with"},
     "喜欢": {"nemo": "lumi", "pos": "particle", "function": "like"},
     "是": {"nemo": "", "pos": "particle", "function": "copula"},
-    "的": {"nemo": "ta", "pos": "particle", "function": "possessive"},
+    "的": {"nemo": "tu", "pos": "particle", "function": "possessive"},
 
     # Robot name
     "Nemo": {"nemo": "Nemo", "pos": "noun"},
@@ -258,7 +258,7 @@ def generate_nemo(parsed, omit_nemo_subject=True):
 
     if sentence_type == "possessive":
         _append(tokens, parsed.get("possessor"))
-        tokens.append("ta")
+        tokens.append("tu")
         _append(tokens, parsed.get("possessed"))
         return tokens
 
@@ -450,7 +450,7 @@ def _first_noun_phrase(items):
         return {
             "text": f"{possessor['text']}的{possessed['text']}",
             "known": possessor.get("known", False) and possessed.get("known", False),
-            "nemo": f"{possessor['nemo']} ta {possessed['nemo']}",
+            "nemo": f"{possessor['nemo']} tu {possessed['nemo']}",
             "pos": "noun",
             "function": "possessive_phrase",
             "possessor": possessor,
