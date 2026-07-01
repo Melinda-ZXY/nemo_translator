@@ -25,9 +25,12 @@ LEXICON = {
     "吃": {"nemo": "Nu", "pos": "verb"},
     "食物": {"nemo": "Nu:", "pos": "noun"},
     "触碰": {"nemo": "No", "pos": "verb"},
+    "摸": {"nemo": "No", "pos": "verb"},
+    "碰": {"nemo": "No", "pos": "verb"},
 
     # Internal M-
     "房子": {"nemo": "Ma", "pos": "noun"},
+    "家": {"nemo": "Ma", "pos": "noun"},
     "保护所": {"nemo": "Ma", "pos": "noun"},
     "基地": {"nemo": "Ma", "pos": "noun"},
     "开心": {"nemo": "Mi", "pos": "state"},
@@ -54,11 +57,13 @@ LEXICON = {
     "喜欢": {"nemo": "lumi", "pos": "particle", "function": "like"},
     "是": {"nemo": "", "pos": "particle", "function": "copula"},
     "的": {"nemo": "tu", "pos": "particle", "function": "possessive"},
+    "了": {"nemo": "", "pos": "particle", "function": "aspect"},
 
     # Robot name
     "Nemo": {"nemo": "Nemo", "pos": "noun"},
     "尼莫": {"nemo": "Nemo", "pos": "noun"},
     "我": {"nemo": "Nemo", "pos": "noun"},
+    "你": {"nemo": "Ni", "pos": "noun"},
 }
 
 ALIASES = {
@@ -163,6 +168,9 @@ def parse_tokens(token_infos):
         "with": None,
         "possessor": None,
         "possessed": None,
+        "secondary_subject": None,
+        "secondary_verb": None,
+        "secondary_object": None,
         "raw_tokens": token_infos,
     }
 
@@ -233,10 +241,12 @@ def parse_tokens(token_infos):
 
     if parsed["verb"] is not None:
         parsed["type"] = "verb"
-        parsed["object"] = _first_noun_phrase(working) or _first_non_function(
-            working,
-            exclude=[parsed["subject"], parsed["verb"], parsed["adverb"]],
-        )
+        _assign_nested_action(parsed, working)
+        if parsed["secondary_verb"] is None:
+            parsed["object"] = _first_noun_phrase(working) or _first_non_function(
+                working,
+                exclude=[parsed["subject"], parsed["verb"], parsed["adverb"]],
+            )
         if parsed["negation"]:
             parsed["negation_target"] = "verb"
         return parsed
@@ -307,6 +317,12 @@ def generate_nemo(parsed, omit_nemo_subject=True):
         _append(tokens, parsed.get("verb"))
         _append(tokens, parsed.get("adverb"))
         _append_negation(tokens, parsed, "verb")
+        if parsed.get("secondary_verb") is not None:
+            _append_subject(tokens, subject, omit_nemo_subject=False)
+            _append(tokens, parsed.get("secondary_verb"))
+            _append_subject(tokens, parsed.get("secondary_subject"), omit_nemo_subject=False)
+            _append(tokens, parsed.get("secondary_object"))
+            return tokens
         _append_subject(tokens, subject, omit_nemo_subject)
         if parsed.get("with") is not None:
             _append_with(tokens, parsed.get("with"))
@@ -380,6 +396,10 @@ def _without_functions(items, functions):
     return [item for item in items if item.get("function") not in functions]
 
 
+def _content_items(items):
+    return _without_functions(items, {"aspect", "question"})
+
+
 def _standalone_possessive_index(items):
     if len(items) != 3:
         return -1
@@ -397,7 +417,7 @@ def _assign_predicate_tail(parsed, items):
         parsed["with"] = items[with_index + 1] if with_index + 1 < len(items) else None
         items = items[:with_index] + items[with_index + 2:]
 
-    content = _without_functions(items, {"negation"})
+    content = _content_items(_without_functions(items, {"negation"}))
     parsed["verb"] = _first_pos(content, "verb")
     parsed["adverb"] = _first_pos(content, "adverb")
     parsed["object"] = _first_noun_phrase(content) or _first_non_function(
@@ -417,7 +437,7 @@ def _negation_target(parsed, main_items, tail_items):
     if negation_index < 0:
         return "main"
 
-    following = _without_functions(tail_items[negation_index + 1:], {"question"})
+    following = _content_items(tail_items[negation_index + 1:])
     target = _first_non_function(following)
     if target is parsed.get("verb"):
         return "verb"
@@ -426,6 +446,34 @@ def _negation_target(parsed, main_items, tail_items):
     if target is parsed.get("adverb") and parsed.get("verb") is not None:
         return "verb"
     return "main"
+
+
+def _assign_nested_action(parsed, items):
+    content = _content_items(items)
+    main_verb = parsed.get("verb")
+    if main_verb is None:
+        return
+
+    try:
+        verb_index = content.index(main_verb)
+    except ValueError:
+        return
+
+    tail = [
+        item
+        for item in content[verb_index + 1:]
+        if item is not parsed.get("adverb") and item.get("function") != "negation"
+    ]
+
+    for index, item in enumerate(tail):
+        if item.get("pos") != "verb":
+            continue
+
+        parsed["secondary_verb"] = item
+        parsed["secondary_subject"] = _first_pos(tail[:index], "noun")
+        after = tail[index + 1:]
+        parsed["secondary_object"] = _first_noun_phrase(after) or _first_pos(after, "noun")
+        return
 
 
 def _first_pos(items, pos):
