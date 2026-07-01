@@ -166,8 +166,8 @@ def parse_tokens(token_infos):
         "raw_tokens": token_infos,
     }
 
-    possessive_index = _function_index(core, "possessive")
-    if possessive_index > 0 and possessive_index < len(core) - 1:
+    possessive_index = _standalone_possessive_index(core)
+    if possessive_index >= 0:
         parsed.update({
             "type": "possessive",
             "possessor": core[possessive_index - 1],
@@ -233,7 +233,7 @@ def parse_tokens(token_infos):
 
     if parsed["verb"] is not None:
         parsed["type"] = "verb"
-        parsed["object"] = _first_non_function(
+        parsed["object"] = _first_noun_phrase(working) or _first_non_function(
             working,
             exclude=[parsed["subject"], parsed["verb"], parsed["adverb"]],
         )
@@ -257,9 +257,9 @@ def generate_nemo(parsed, omit_nemo_subject=True):
     subject = parsed.get("subject")
 
     if sentence_type == "possessive":
-        _append(tokens, parsed.get("possessed"))
-        tokens.append("ta")
         _append(tokens, parsed.get("possessor"))
+        tokens.append("ta")
+        _append(tokens, parsed.get("possessed"))
         return tokens
 
     if sentence_type == "identity":
@@ -380,6 +380,16 @@ def _without_functions(items, functions):
     return [item for item in items if item.get("function") not in functions]
 
 
+def _standalone_possessive_index(items):
+    if len(items) != 3:
+        return -1
+    if items[0].get("pos") != "noun" or items[2].get("pos") != "noun":
+        return -1
+    if items[1].get("function") != "possessive":
+        return -1
+    return 1
+
+
 def _assign_predicate_tail(parsed, items):
     items = list(items)
     with_index = _function_index(items, "with")
@@ -390,7 +400,7 @@ def _assign_predicate_tail(parsed, items):
     content = _without_functions(items, {"negation"})
     parsed["verb"] = _first_pos(content, "verb")
     parsed["adverb"] = _first_pos(content, "adverb")
-    parsed["object"] = _first_non_function(
+    parsed["object"] = _first_noun_phrase(content) or _first_non_function(
         content,
         exclude=[parsed["verb"], parsed["adverb"]],
     )
@@ -425,6 +435,30 @@ def _first_pos(items, pos):
     return None
 
 
+def _first_noun_phrase(items):
+    for index, item in enumerate(items):
+        if item.get("function") != "possessive":
+            continue
+        if index == 0 or index >= len(items) - 1:
+            continue
+
+        possessor = items[index - 1]
+        possessed = items[index + 1]
+        if possessor.get("pos") != "noun" or possessed.get("pos") != "noun":
+            continue
+
+        return {
+            "text": f"{possessor['text']}的{possessed['text']}",
+            "known": possessor.get("known", False) and possessed.get("known", False),
+            "nemo": f"{possessor['nemo']} ta {possessed['nemo']}",
+            "pos": "noun",
+            "function": "possessive_phrase",
+            "possessor": possessor,
+            "possessed": possessed,
+        }
+    return None
+
+
 def _first_non_function(items, exclude=None):
     if exclude is None:
         excluded_items = []
@@ -442,8 +476,9 @@ def _first_non_function(items, exclude=None):
 
 
 def _append(tokens, item):
-    if item is not None and item.get("nemo"):
-        tokens.append(item["nemo"])
+    if item is None or not item.get("nemo"):
+        return
+    tokens.extend(item["nemo"].split())
 
 
 def _append_with(tokens, item):
