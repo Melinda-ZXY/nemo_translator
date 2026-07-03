@@ -82,6 +82,7 @@ def synthesize_tts(
     base_url: str = "http://172.16.60.69:7874",
     emotion: str = "happiness",
     temperature: float = 0.5,
+    playback_speed: float = 1.0,
     timeout: int = 120,
 ) -> TTSResult:
     text = (text or "").strip()
@@ -94,8 +95,8 @@ def synthesize_tts(
     except (OSError, WebSocketException) as exc:
         raise RuntimeError(
             f"Could not connect to TTS server at {ws_url}. "
-            "If this app is running on Streamlit Cloud, it cannot reach an internal 172.x.x.x address. "
-            "Run the app on the same network as the TTS server, or expose the TTS server through a tunnel/public URL."
+            "Check that the server URL is reachable from where this app is running. "
+            "If the TTS server is on an internal address, expose it through a tunnel/public URL before using Streamlit Cloud."
         ) from exc
     chunks: list[bytes] = []
     sample_rate: int | None = None
@@ -132,9 +133,10 @@ def synthesize_tts(
                     pcm_bytes = base64.b64decode(msg["play_pcm_b64"])
                 else:
                     pcm_bytes = b"".join(chunks)
+                playback_sample_rate = _playback_sample_rate(sample_rate, playback_speed)
                 return TTSResult(
-                    wav_bytes=_pcm16_to_wav(pcm_bytes, sample_rate),
-                    sample_rate=sample_rate,
+                    wav_bytes=_pcm16_to_wav(pcm_bytes, playback_sample_rate),
+                    sample_rate=playback_sample_rate,
                     status=status or "Done.",
                 )
             elif msg_type == "error":
@@ -299,6 +301,11 @@ def _tts_ws_url(base_url: str) -> str:
     scheme = "wss" if parsed.scheme in {"https", "wss"} else "ws"
     netloc = parsed.netloc or parsed.path
     return f"{scheme}://{netloc}/ws/tts"
+
+
+def _playback_sample_rate(sample_rate: int, playback_speed: float) -> int:
+    speed = max(0.25, min(float(playback_speed or 1.0), 3.0))
+    return max(1000, int(round(sample_rate * speed)))
 
 
 def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int) -> bytes:

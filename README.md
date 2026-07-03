@@ -11,6 +11,16 @@ streamlit run app.py
 
 The translator is rule-based and does not use an LLM.
 
+## Dysarthria Conversion App
+
+This repo also includes a separate Streamlit app for Chinese-to-dysarthria pinyin conversion and TTS:
+
+```bash
+streamlit run dysarthria_app.py
+```
+
+For Streamlit Community Cloud, use `dysarthria_app.py` as the entry point for that separate app.
+
 ## Deploy
 
 This app is ready for Streamlit Community Cloud:
