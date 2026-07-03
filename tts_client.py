@@ -9,6 +9,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+import numpy as np
 from pypinyin import Style, lazy_pinyin
 from pypinyin.constants import PINYIN_DICT
 from websocket import create_connection
@@ -133,10 +134,10 @@ def synthesize_tts(
                     pcm_bytes = base64.b64decode(msg["play_pcm_b64"])
                 else:
                     pcm_bytes = b"".join(chunks)
-                playback_sample_rate = _playback_sample_rate(sample_rate, playback_speed)
+                pcm_bytes = _change_playback_speed_pcm16(pcm_bytes, sample_rate, playback_speed)
                 return TTSResult(
-                    wav_bytes=_pcm16_to_wav(pcm_bytes, playback_sample_rate),
-                    sample_rate=playback_sample_rate,
+                    wav_bytes=_pcm16_to_wav(pcm_bytes, sample_rate),
+                    sample_rate=sample_rate,
                     status=status or "Done.",
                 )
             elif msg_type == "error":
@@ -303,9 +304,136 @@ def _tts_ws_url(base_url: str) -> str:
     return f"{scheme}://{netloc}/ws/tts"
 
 
-def _playback_sample_rate(sample_rate: int, playback_speed: float) -> int:
+def _normalized_playback_speed(playback_speed: float) -> float:
     speed = max(0.25, min(float(playback_speed or 1.0), 3.0))
-    return max(1000, int(round(sample_rate * speed)))
+    return speed
+
+
+def _change_playback_speed_pcm16(pcm_bytes: bytes, sample_rate: int, playback_speed: float) -> bytes:
+    speed = _normalized_playback_speed(playback_speed)
+    if abs(speed - 1.0) < 0.01 or len(pcm_bytes) < 4:
+        return pcm_bytes
+
+    samples = np.frombuffer(pcm_bytes, dtype="<i2").astype(np.float32)
+    if samples.size < max(256, sample_rate // 20):
+        return pcm_bytes
+
+    stretched = _wsola_time_stretch(samples, sample_rate, speed)
+    return np.clip(stretched, -32768, 32767).astype("<i2").tobytes()
+
+
+def _wsola_time_stretch(samples: np.ndarray, sample_rate: int, speed: float) -> np.ndarray:
+    target_length = max(1, int(round(samples.size / speed)))
+    frame_length = max(256, int(round(sample_rate * 0.05)))
+    synthesis_hop = max(64, frame_length // 4)
+    analysis_hop = synthesis_hop * speed
+    search_radius = max(32, synthesis_hop)
+
+    if samples.size <= frame_length:
+        return samples.copy()
+
+    window = np.hanning(frame_length).astype(np.float32)
+    if not np.any(window):
+        window = np.ones(frame_length, dtype=np.float32)
+
+    output = np.zeros(target_length + frame_length + synthesis_hop, dtype=np.float32)
+    weights = np.zeros_like(output)
+    max_input_start = samples.size - frame_length
+    frame_count = max(1, int(np.ceil(max(1, target_length - frame_length) / synthesis_hop)) + 1)
+
+    for frame_index in range(frame_count):
+        output_pos = frame_index * synthesis_hop
+        ideal_input_pos = int(round(frame_index * analysis_hop))
+        if frame_index == 0:
+            input_pos = 0
+        else:
+            input_pos = _best_wsola_input_pos(
+                samples,
+                output,
+                weights,
+                output_pos,
+                ideal_input_pos,
+                max_input_start,
+                frame_length,
+                synthesis_hop,
+                search_radius,
+            )
+
+        frame = samples[input_pos : input_pos + frame_length]
+        if frame.size < frame_length:
+            frame = np.pad(frame, (0, frame_length - frame.size))
+
+        end = output_pos + frame_length
+        output[output_pos:end] += frame * window
+        weights[output_pos:end] += window
+
+    active = weights > 1e-6
+    output[active] /= weights[active]
+    return output[:target_length]
+
+
+def _best_wsola_input_pos(
+    samples: np.ndarray,
+    output: np.ndarray,
+    weights: np.ndarray,
+    output_pos: int,
+    ideal_input_pos: int,
+    max_input_start: int,
+    frame_length: int,
+    synthesis_hop: int,
+    search_radius: int,
+) -> int:
+    search_start = max(0, ideal_input_pos - search_radius)
+    search_end = min(max_input_start, ideal_input_pos + search_radius)
+    if search_end <= search_start:
+        return min(max(0, ideal_input_pos), max_input_start)
+
+    overlap_length = min(frame_length - synthesis_hop, frame_length, output_pos, samples.size)
+    if overlap_length < 32:
+        return min(max(0, ideal_input_pos), max_input_start)
+
+    reference_weights = weights[output_pos : output_pos + overlap_length]
+    reference = output[output_pos : output_pos + overlap_length].copy()
+    active = reference_weights > 1e-6
+    reference[active] /= reference_weights[active]
+    reference -= np.mean(reference)
+    reference_norm = float(np.linalg.norm(reference)) + 1e-6
+
+    step = 8
+    best_pos = search_start
+    best_score = -np.inf
+    for candidate_pos in range(search_start, search_end + 1, step):
+        score = _normalized_similarity(
+            reference,
+            reference_norm,
+            samples[candidate_pos : candidate_pos + overlap_length],
+        )
+        if score > best_score:
+            best_score = score
+            best_pos = candidate_pos
+
+    refine_start = max(search_start, best_pos - step)
+    refine_end = min(search_end, best_pos + step)
+    for candidate_pos in range(refine_start, refine_end + 1):
+        score = _normalized_similarity(
+            reference,
+            reference_norm,
+            samples[candidate_pos : candidate_pos + overlap_length],
+        )
+        if score > best_score:
+            best_score = score
+            best_pos = candidate_pos
+
+    return best_pos
+
+
+def _normalized_similarity(reference: np.ndarray, reference_norm: float, candidate: np.ndarray) -> float:
+    if candidate.size != reference.size:
+        return -np.inf
+    candidate = candidate.astype(np.float32, copy=False)
+    candidate = candidate - np.mean(candidate)
+    candidate_norm = float(np.linalg.norm(candidate)) + 1e-6
+    return float(np.dot(reference, candidate) / (reference_norm * candidate_norm))
 
 
 def _pcm16_to_wav(pcm_bytes: bytes, sample_rate: int) -> bytes:
