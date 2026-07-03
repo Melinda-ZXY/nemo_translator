@@ -1,6 +1,6 @@
 import streamlit as st
 
-from tts_client import synthesize_tts
+from tts_client import nemo_to_tts_text, synthesize_tts
 from translator_core import translate, to_json
 
 
@@ -46,9 +46,10 @@ st.code(result["nemo"] or " ", language=None)
 st.subheader("TTS output")
 default_tts_url = st.secrets.get("TTS_URL", "http://172.16.60.69:7874")
 tts_url = st.text_input("TTS server", value=default_tts_url)
-if st.session_state.get("last_nemo_output") != result["nemo"]:
-    st.session_state["tts_text"] = result["nemo"]
-    st.session_state["last_nemo_output"] = result["nemo"]
+tts_default = nemo_to_tts_text(result["nemo"])
+if st.session_state.get("last_nemo_output") != tts_default:
+    st.session_state["tts_text"] = tts_default
+    st.session_state["last_nemo_output"] = tts_default
 tts_text = st.text_input("TTS input", key="tts_text")
 tts_emotion = st.selectbox("Emotion", TTS_EMOTIONS, index=0)
 
