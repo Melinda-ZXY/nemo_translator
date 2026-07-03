@@ -32,15 +32,11 @@ INITIALS = [
 ]
 INITIAL_SWAPS = {
     "l": "n",
-    "n": "l",
     "k": "t",
     "g": "d",
     "zh": "z",
-    "z": "zh",
     "ch": "c",
-    "c": "ch",
     "sh": "s",
-    "s": "sh",
 }
 PINYIN_RE = re.compile(r"^([a-zvü]+)([1-5]?)$")
 
