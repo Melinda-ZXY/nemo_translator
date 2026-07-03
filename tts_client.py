@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from websocket import create_connection
+from websocket import WebSocketException
 
 
 VOWELS = set("aeiou")
@@ -24,7 +25,7 @@ def nemo_to_tts_text(nemo_text: str) -> str:
     syllables: list[str] = []
     for token in _tts_tokens(nemo_text):
         syllables.extend(_split_no_diphthong_syllables(_expand_long_vowels(token)))
-    return f"【{''.join(f'{syllable}1' for syllable in syllables)}】"
+    return f"[{''.join(f'{syllable}1' for syllable in syllables)}]"
 
 
 def synthesize_tts(
@@ -39,7 +40,14 @@ def synthesize_tts(
         raise ValueError("TTS text is empty.")
 
     ws_url = _tts_ws_url(base_url)
-    ws = create_connection(ws_url, timeout=timeout)
+    try:
+        ws = create_connection(ws_url, timeout=timeout)
+    except (OSError, WebSocketException) as exc:
+        raise RuntimeError(
+            f"Could not connect to TTS server at {ws_url}. "
+            "If this app is running on Streamlit Cloud, it cannot reach an internal 172.x.x.x address. "
+            "Run the app on the same network as the TTS server, or expose the TTS server through a tunnel/public URL."
+        ) from exc
     chunks: list[bytes] = []
     sample_rate: int | None = None
     status = ""
@@ -119,6 +127,8 @@ def _split_no_diphthong_syllables(token: str) -> list[str]:
 
         vowel = token[index]
         index += 1
+        if vowel == "i" and index < len(token) and token[index] == "e":
+            index += 1
         while index < len(token) and token[index] == vowel:
             index += 1
 
