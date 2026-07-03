@@ -24,10 +24,11 @@ EMOTION_LABELS = {
     "disgust": "厌恶",
 }
 EXAMPLES = [
-    "你好",
-    "老师知道这是谁的水杯",
-    "哥哥可以给我一个杯子",
-    "小狗喜欢睡觉",
+    "主人你好",
+    "尼莫看主人",
+    "主人喜欢尼莫",
+    "主人给尼莫水杯",
+    "尼莫想和主人玩",
 ]
 
 
@@ -37,7 +38,7 @@ st.title("构音障碍语音转换")
 st.caption("中文输入会先转成拼音，再套用构音障碍音变规则。")
 
 example = st.selectbox("示例", EXAMPLES, index=0)
-text = st.text_area("中文输入", value=example, height=110, placeholder="输入中文，例如：老师知道这是谁的水杯")
+text = st.text_area("中文输入", value=example, height=110, placeholder="输入中文，例如：主人喜欢尼莫")
 
 converted = convert_text(text)
 
