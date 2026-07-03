@@ -5,9 +5,11 @@ import io
 import json
 import unicodedata
 import wave
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from pypinyin import Style, lazy_pinyin
 from pypinyin.constants import PINYIN_DICT
 from websocket import create_connection
 from websocket import WebSocketException
@@ -49,15 +51,30 @@ class TTSResult:
 
 
 def nemo_to_tts_text(nemo_text: str) -> str:
-    syllables: list[str] = []
+    return _nemo_to_tts_text(nemo_text)
+
+
+def translation_to_tts_text(translation_result: dict) -> str:
+    return _nemo_to_tts_text(
+        translation_result.get("nemo", ""),
+        loanword_tones=_loanword_tone_queues(translation_result.get("tokens", [])),
+    )
+
+
+def _nemo_to_tts_text(nemo_text: str, loanword_tones: dict[str, deque[list[str]]] | None = None) -> str:
+    parts: list[str] = []
     for token in _tts_tokens(nemo_text):
         if token in SPECIAL_TTS_SYLLABLES:
-            syllables.extend(SPECIAL_TTS_SYLLABLES[token])
+            parts.extend(_with_default_tone(SPECIAL_TTS_SYLLABLES[token]))
         elif token in NEMO_TTS_TOKENS:
-            syllables.extend(_split_no_diphthong_syllables(_expand_long_vowels(token)))
+            parts.extend(_with_default_tone(_split_no_diphthong_syllables(_expand_long_vowels(token))))
         else:
-            syllables.extend(_split_pinyin_loanword(token))
-    return f"[{''.join(f'{syllable}1' for syllable in syllables)}]"
+            tone_syllables = _pop_loanword_tone_syllables(token, loanword_tones)
+            if tone_syllables is not None:
+                parts.extend(tone_syllables)
+            else:
+                parts.extend(_with_default_tone(_split_pinyin_loanword(token)))
+    return f"[{''.join(parts)}]"
 
 
 def synthesize_tts(
@@ -141,12 +158,25 @@ def _expand_long_vowels(token: str) -> str:
     return token.replace(":", "")
 
 
+def _with_default_tone(syllables: list[str]) -> list[str]:
+    return [f"{syllable}1" for syllable in syllables if syllable]
+
+
 def _plain_pinyin(text: str) -> str:
     text = text.lower().translate(PINYIN_UMLAUTS)
     return "".join(
         char
         for char in unicodedata.normalize("NFD", text)
         if char.isalpha() and not unicodedata.combining(char)
+    )
+
+
+def _plain_pinyin_with_tone(text: str) -> str:
+    text = text.lower().translate(PINYIN_UMLAUTS)
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFD", text)
+        if (char.isalpha() or char.isdigit()) and not unicodedata.combining(char)
     )
 
 
@@ -186,6 +216,50 @@ def _split_pinyin_from(token: str, index: int, memo: dict[int, list[str] | None]
 
     memo[index] = None
     return None
+
+
+def _loanword_tone_queues(token_infos: list[dict]) -> dict[str, deque[list[str]]]:
+    queues: dict[str, deque[list[str]]] = defaultdict(deque)
+    for token_info in token_infos:
+        if token_info.get("function") != "loanword":
+            continue
+        tone_syllables = _pinyin_tone_syllables(token_info.get("text", ""))
+        if not tone_syllables:
+            continue
+        key = _plain_pinyin(token_info.get("nemo", ""))
+        if key:
+            queues[key].append(tone_syllables)
+    return queues
+
+
+def _pop_loanword_tone_syllables(
+    token: str,
+    loanword_tones: dict[str, deque[list[str]]] | None,
+) -> list[str] | None:
+    if not loanword_tones:
+        return None
+    queue = loanword_tones.get(_plain_pinyin(token))
+    if not queue:
+        return None
+    return queue.popleft()
+
+
+def _pinyin_tone_syllables(text: str) -> list[str]:
+    syllables: list[str] = []
+    for raw in lazy_pinyin(
+        text,
+        style=Style.TONE3,
+        errors="default",
+        neutral_tone_with_five=True,
+    ):
+        syllable = _plain_pinyin_with_tone(raw)
+        if not syllable:
+            continue
+        if syllable[-1].isdigit():
+            syllables.append(syllable)
+        else:
+            syllables.extend(_with_default_tone(_split_pinyin_loanword(syllable)))
+    return syllables
 
 
 def _split_no_diphthong_syllables(token: str) -> list[str]:

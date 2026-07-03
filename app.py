@@ -1,7 +1,7 @@
 import streamlit as st
 
 from orthography import render_orthography_html
-from tts_client import nemo_to_tts_text, synthesize_tts
+from tts_client import synthesize_tts, translation_to_tts_text
 from translator_core import translate, to_json
 
 
@@ -50,7 +50,7 @@ st.markdown(render_orthography_html(result["nemo"]), unsafe_allow_html=True)
 st.subheader("语音输出")
 default_tts_url = st.secrets.get("TTS_URL", "http://172.16.60.69:7874")
 tts_url = st.text_input("TTS 服务器", value=default_tts_url)
-tts_default = nemo_to_tts_text(result["nemo"])
+tts_default = translation_to_tts_text(result)
 if st.session_state.get("last_nemo_output") != tts_default:
     st.session_state["tts_text"] = tts_default
     st.session_state["last_nemo_output"] = tts_default
