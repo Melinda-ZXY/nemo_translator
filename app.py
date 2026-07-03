@@ -37,14 +37,14 @@ st.title("Nemo 语言翻译器")
 st.caption("用于短中文句子的规则翻译演示。")
 
 example = st.selectbox("示例", EXAMPLES, index=0)
-text = st.text_input("中文输入", value=example, placeholder="输入一句短中文，例如：主人想吃苹果")
+text = st.text_input("中文输入", value=example, placeholder="输入一句短中文，例如：Nemo很开心")
 
 result = translate(text)
 
-st.subheader("Nemo 输出")
+st.subheader("发音输出")
 st.code(result["nemo"] or " ", language=None)
 
-st.subheader("Nemo 字形输出")
+st.subheader("文字输出")
 st.markdown(render_orthography_html(result["nemo"]), unsafe_allow_html=True)
 
 st.subheader("语音输出")
