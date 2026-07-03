@@ -3,18 +3,42 @@ from __future__ import annotations
 import base64
 import io
 import json
+import unicodedata
 import wave
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from pypinyin.constants import PINYIN_DICT
 from websocket import create_connection
 from websocket import WebSocketException
+
+from translator_core import LEXICON
 
 
 VOWELS = set("aeiou")
 SPECIAL_TTS_SYLLABLES = {
     "nemo": ["ni", "mo"],
 }
+NEMO_TTS_TOKENS = {
+    part.lower()
+    for entry in LEXICON.values()
+    for part in entry.get("nemo", "").replace("-", " ").split()
+    if part
+}
+PINYIN_UMLAUTS = str.maketrans(
+    {
+        "ü": "v",
+        "ǖ": "v",
+        "ǘ": "v",
+        "ǚ": "v",
+        "ǜ": "v",
+        "Ü": "v",
+        "Ǖ": "v",
+        "Ǘ": "v",
+        "Ǚ": "v",
+        "Ǜ": "v",
+    }
+)
 
 
 @dataclass
@@ -29,8 +53,10 @@ def nemo_to_tts_text(nemo_text: str) -> str:
     for token in _tts_tokens(nemo_text):
         if token in SPECIAL_TTS_SYLLABLES:
             syllables.extend(SPECIAL_TTS_SYLLABLES[token])
-        else:
+        elif token in NEMO_TTS_TOKENS:
             syllables.extend(_split_no_diphthong_syllables(_expand_long_vowels(token)))
+        else:
+            syllables.extend(_split_pinyin_loanword(token))
     return f"[{''.join(f'{syllable}1' for syllable in syllables)}]"
 
 
@@ -113,6 +139,53 @@ def _expand_long_vowels(token: str) -> str:
     for vowel in VOWELS:
         token = token.replace(f"{vowel}:", vowel * 2)
     return token.replace(":", "")
+
+
+def _plain_pinyin(text: str) -> str:
+    text = text.lower().translate(PINYIN_UMLAUTS)
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFD", text)
+        if char.isalpha() and not unicodedata.combining(char)
+    )
+
+
+PINYIN_SYLLABLES = {
+    syllable
+    for raw in PINYIN_DICT.values()
+    for syllable in (_plain_pinyin(part) for part in str(raw).split(","))
+    if syllable
+}
+MAX_PINYIN_SYLLABLE_LEN = max((len(syllable) for syllable in PINYIN_SYLLABLES), default=0)
+
+
+def _split_pinyin_loanword(token: str) -> list[str]:
+    token = _plain_pinyin(token)
+    if not token or not PINYIN_SYLLABLES:
+        return [token] if token else []
+
+    best = _split_pinyin_from(token, 0, {})
+    return best if best is not None else [token]
+
+
+def _split_pinyin_from(token: str, index: int, memo: dict[int, list[str] | None]) -> list[str] | None:
+    if index == len(token):
+        return []
+    if index in memo:
+        return memo[index]
+
+    last_index = min(len(token), index + MAX_PINYIN_SYLLABLE_LEN)
+    for end_index in range(last_index, index, -1):
+        syllable = token[index:end_index]
+        if syllable not in PINYIN_SYLLABLES:
+            continue
+        rest = _split_pinyin_from(token, end_index, memo)
+        if rest is not None:
+            memo[index] = [syllable, *rest]
+            return memo[index]
+
+    memo[index] = None
+    return None
 
 
 def _split_no_diphthong_syllables(token: str) -> list[str]:
