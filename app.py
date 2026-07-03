@@ -1,5 +1,6 @@
 import streamlit as st
 
+from orthography import render_orthography_html
 from tts_client import nemo_to_tts_text, synthesize_tts
 from translator_core import translate, to_json
 
@@ -42,6 +43,9 @@ result = translate(text)
 
 st.subheader("Nemo output")
 st.code(result["nemo"] or " ", language=None)
+
+st.subheader("Nemo orthography")
+st.markdown(render_orthography_html(result["nemo"]), unsafe_allow_html=True)
 
 st.subheader("TTS output")
 default_tts_url = st.secrets.get("TTS_URL", "http://172.16.60.69:7874")
