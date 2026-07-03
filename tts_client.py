@@ -12,6 +12,9 @@ from websocket import WebSocketException
 
 
 VOWELS = set("aeiou")
+SPECIAL_TTS_SYLLABLES = {
+    "nemo": ["ni", "mo"],
+}
 
 
 @dataclass
@@ -24,7 +27,10 @@ class TTSResult:
 def nemo_to_tts_text(nemo_text: str) -> str:
     syllables: list[str] = []
     for token in _tts_tokens(nemo_text):
-        syllables.extend(_split_no_diphthong_syllables(_expand_long_vowels(token)))
+        if token in SPECIAL_TTS_SYLLABLES:
+            syllables.extend(SPECIAL_TTS_SYLLABLES[token])
+        else:
+            syllables.extend(_split_no_diphthong_syllables(_expand_long_vowels(token)))
     return f"[{''.join(f'{syllable}1' for syllable in syllables)}]"
 
 
@@ -96,7 +102,7 @@ def synthesize_tts(
 
 def _tts_tokens(nemo_text: str) -> list[str]:
     tokens = []
-    for raw_token in (nemo_text or "").lower().replace("-", "").split():
+    for raw_token in (nemo_text or "").lower().replace("-", " ").split():
         token = "".join(char for char in raw_token if char.isalpha() or char == ":")
         if token:
             tokens.append(token)
