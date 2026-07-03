@@ -1,3 +1,4 @@
 streamlit
 jieba
 pypinyin
+websocket-client
